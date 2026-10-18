@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fodinha</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Figtree:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap">
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+/* Layout: mesa de feltro — placar dos jogadores no topo, vaza no centro, mão do jogador embaixo. Visual único (escuro). */
+:root {
+  --felt: #0e3a2d;
+  --felt-2: #134a3a;
+  --felt-3: #1b5d49;
+  --line: #2c7059;
+  --ink: #eef3ea;
+  --muted: #9dbcaa;
+  --brass: #e3b552;
+  --brass-ink: #2a1f05;
+  --red: #ff6b5e;
+  --card: #fbf8f0;
+  --card-ink: #1c1c1e;
+  --card-red: #c3302a;
+  --display: "Alfa Slab One", Rockwell, "Roboto Slab", Georgia, serif;
+  --body: "Figtree", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  background: radial-gradient(ellipse at 50% 30%, var(--felt-3), var(--felt) 70%) fixed, var(--felt);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.45;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding-block: 20px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 18px;
+}
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+h1 { font-family: var(--display); font-weight: 400; font-size: 2.2rem; margin: 0; letter-spacing: .5px; color: var(--brass); }
+h2 { font-family: var(--display); font-weight: 400; font-size: 1.3rem; margin: 0; text-wrap: balance; }
+.status { font-family: var(--mono); font-size: .85rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.status b { color: var(--ink); font-weight: 500; }
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
+button {
+  font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--felt-2); color: var(--ink); padding: 10px 16px; font-weight: 600;
+}
+button:hover { border-color: var(--brass); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+button.primary { background: var(--brass); color: var(--brass-ink); border-color: var(--brass); font-weight: 800; }
+button.primary:hover { filter: brightness(1.08); }
+button:disabled { opacity: .35; cursor: not-allowed; }
+.panel { background: color-mix(in srgb, var(--felt) 70%, transparent); border: 1px solid var(--line); border-radius: 16px; padding: 16px; min-width: 0; }
+.stack { display: grid; gap: 12px; align-content: start; }
+.banner { border: 1px solid var(--red); color: var(--red); border-radius: 12px; padding: 10px 14px; }
+.hint { margin: 0; color: var(--muted); font-size: .88rem; }
+.error { color: var(--red); margin: 0; }
+
+/* Menu e sala */
+.menu { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
+.two { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+@media (min-width: 860px) { .menu { grid-template-columns: minmax(0, 1fr) 320px; } }
+.field { display: grid; gap: 6px; font-size: .85rem; color: var(--muted); }
+.check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.code { font-family: var(--display); font-size: 2.6rem; letter-spacing: .18em; color: var(--brass); line-height: 1; }
+.plist { display: grid; gap: 8px; }
+.prow { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--felt-2); min-width: 0; }
+.prow .pn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.prow button { padding: 4px 10px; }
+input[type=text], input[type=number] {
+  font: inherit; color: var(--ink); background: var(--felt-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 12px; min-width: 0; width: 100%;
+}
+#m-code { text-transform: uppercase; font-family: var(--mono); letter-spacing: .2em; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.row > input { flex: 1 1 180px; }
+.rules { color: var(--muted); font-size: .9rem; display: grid; gap: 6px; align-content: start; }
+.rules p { margin: 0; }
+.order { font-family: var(--mono); color: var(--ink); }
+
+/* Placar */
+.seats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.seat { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; background: var(--felt-2); min-width: 0; align-content: start; }
+.seat .name { display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
+.seat .name > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.seat.dealer .name { color: var(--red); }
+.seat.active { border-color: var(--brass); box-shadow: 0 0 0 1px var(--brass) inset; }
+.seat.active .name { font-weight: 800; }
+.seat.out { opacity: .4; }
+.tag { font-size: .66rem; font-family: var(--mono); padding: 1px 6px; border-radius: 6px; border: 1px solid currentColor; opacity: .85; flex: none; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.on { background: #6fdc8c; }
+.lives { display: flex; flex-wrap: wrap; gap: 3px; }
+.pip { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+.pip.lost { background: transparent; border: 1px solid var(--line); }
+.score { font-family: var(--mono); font-size: .8rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 10px; font-variant-numeric: tabular-nums; }
+.score b { color: var(--ink); font-weight: 500; }
+.seatcard { justify-self: start; }
+
+/* Mesa */
+.table { min-height: 220px; display: grid; gap: 14px; align-content: start; }
+.trick { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; min-height: 150px; align-items: flex-end; }
+.played { display: grid; justify-items: center; gap: 6px; font-size: .8rem; color: var(--muted); }
+.played.win .card { box-shadow: 0 0 0 3px var(--brass), 0 8px 18px rgba(0,0,0,.4); transform: translateY(-6px); }
+.played.win span { color: var(--brass); font-weight: 800; }
+.msg { text-align: center; color: var(--muted); margin: 0; }
+.msg strong { color: var(--ink); }
+
+.card {
+  width: 70px; height: 100px; border-radius: 9px; background: var(--card); color: var(--card-ink);
+  display: grid; grid-template-rows: auto 1fr auto; padding: 5px 7px; position: relative;
+  box-shadow: 0 4px 10px rgba(0,0,0,.35); font-family: var(--display); user-select: none;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.card.red { color: var(--card-red); }
+.card .rk { font-size: 1.15rem; line-height: 1; }
+.card .big { font-size: 2.1rem; align-self: center; justify-self: center; line-height: 1; font-family: var(--body); }
+.card .rk.bot { transform: rotate(180deg); justify-self: end; }
+.card.back { background: repeating-linear-gradient(45deg, var(--brass) 0 6px, #b8892e 6px 12px); border: 4px solid var(--card); }
+.card.mini { width: 44px; height: 62px; padding: 3px 5px; border-radius: 6px; }
+.card.mini .rk { font-size: .85rem; }
+.card.mini .big { font-size: 1.3rem; }
+button.cardbtn { padding: 0; border: 0; background: none; border-radius: 9px; }
+button.cardbtn:hover .card { transform: translateY(-8px); box-shadow: 0 0 0 3px var(--brass), 0 10px 20px rgba(0,0,0,.4); }
+button.cardbtn:disabled { opacity: 1; cursor: default; }
+button.cardbtn:disabled:hover .card { transform: none; box-shadow: 0 4px 10px rgba(0,0,0,.35); }
+
+.hand { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.bids { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.bids button { min-width: 48px; font-family: var(--mono); font-size: 1.05rem; }
+.handzone { display: grid; gap: 14px; justify-items: center; text-align: center; }
+
+.tablewrap { overflow-x: auto; width: 100%; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+td.num { font-family: var(--mono); }
+.neg { color: var(--red); }
+.ok { color: var(--brass); }
+
+.log { font-family: var(--mono); font-size: .78rem; color: var(--muted); max-height: 180px; overflow-y: auto; display: grid; gap: 2px; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+@media (min-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr) 280px; } }
+@media (max-width: 480px) {
+  .card { width: 58px; height: 84px; }
+  .card .big { font-size: 1.7rem; }
+  h1 { font-size: 1.8rem; }
+  .code { font-size: 2rem; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Fodinha</h1>
+    <div class="status" id="status"></div>
+  </header>
+  <main id="app"></main>
+</div>
+
+<script>
+/* =========================================================
+   Cartas e regras
+   ========================================================= */
+const RANKS = ['4','5','6','7','Q','J','K','A','2','3'];
+// Desempate por naipe, do mais fraco ao mais forte: ouros < espadas < copas < paus
+const SUITS = [
+  { name: 'ouros',   sym: '♦', red: true },
+  { name: 'espadas', sym: '♠', red: false },
+  { name: 'copas',   sym: '♥', red: true },
+  { name: 'paus',    sym: '♣', red: false },
+];
+const cardValue = c => c.r * 4 + c.s;
+const cardName = c => `${RANKS[c.r]} de ${SUITS[c.s].name}`;
+const MAX_PLAYERS = 8;
+const CPU_NAMES = ['Bruno', 'Carla', 'Diego', 'Elisa', 'Fábio', 'Gabi', 'Hugo', 'Inês', 'João', 'Lara'];
+
+const SKEY = 'fodinha-session';
+const PKEY = 'fodinha-prefs';
+const store = {
+  get(k, s) { try { return JSON.parse((s || sessionStorage).getItem(k)); } catch { return null; } },
+  set(k, v, s) { try { (s || sessionStorage).setItem(k, JSON.stringify(v)); } catch {} },
+  del(k, s) { try { (s || sessionStorage).removeItem(k); } catch {} },
+};
+const rid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+const randCode = () => Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
+const peerId = code => 'fodinha-mesa-' + code.toLowerCase();
+const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+
+/* =========================================================
+   Estado do anfitrião (fonte da verdade)
+   ========================================================= */
+let G = null;          // estado completo, só existe no anfitrião
+let V = null;          // visão que este navegador desenha
+let hostTimer = null;
+const net = { role: null, peer: null, conns: new Map(), hostConn: null, code: '', token: '', name: '', rt: null, resuming: false };
+const UI = { screen: 'menu', msg: '', error: '' };
+const prefs = Object.assign({ name: '', lives: 5, blind: true }, store.get(PKEY, localStorage) || {});
+
+const newPlayer = (name, token, cpu) => ({ name, token, cpu, online: true, lives: 0, hand: [], bid: null, made: 0, alive: true });
+const alive = () => G.players.map((p, i) => i).filter(i => G.players[i].alive);
+const nextAlive = i => { const n = G.players.length; for (let k = 1; k <= n; k++) { const j = (i + k) % n; if (G.players[j].alive) return j; } return i; };
+const maxCards = () => Math.floor(40 / alive().length);
+const log = t => { G.log.unshift(t); G.log = G.log.slice(0, 80); };
+function uniqueName(name) {
+  let n = name, k = 2;
+  while (G.players.some(p => p.name.toLowerCase() === n.toLowerCase())) n = `${name} ${k++}`;
+  return n;
+}
+
+function startGame() {
+  G.players.forEach(p => Object.assign(p, { lives: G.settings.lives, alive: true, hand: [], bid: null, made: 0 }));
+  Object.assign(G, {
+    phase: 'deal', round: 0, cards: 0, dir: 1, blind: false,
+    dealer: G.players.length - 1, turn: null, bidStart: null, leader: null,
+    trick: [], lastWinner: null, results: null, log: [],
+  });
+  log(`Jogo começou com ${G.players.length} jogadores e ${G.settings.lives} vidas.`);
+}
+
+function deal() {
+  G.round++;
+  if (G.round === 1) { G.cards = 1; G.dir = 1; }
+  else {
+    // Sobe até o máximo do baralho, desce até 1 e volta a subir, para sempre.
+    let c = G.cards + G.dir;
+    if (c > maxCards()) { G.dir = -1; c = G.cards - 1; }
+    if (c < 1) { G.dir = 1; c = 2; }
+    G.cards = clamp(c, 1, maxCards());
+  }
+  G.blind = G.settings.blind && G.cards === 1;
+  const deck = [];
+  for (let r = 0; r < 10; r++) for (let s = 0; s < 4; s++) deck.push({ r, s });
+  for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+  G.players.forEach(p => { p.bid = null; p.made = 0; p.hand = []; });
+  for (let k = 0; k < G.cards; k++) for (const i of alive()) G.players[i].hand.push(deck.pop());
+  G.players.forEach(p => p.hand.sort((a, b) => cardValue(a) - cardValue(b)));
+  G.turn = G.bidStart = nextAlive(G.dealer);
+  G.trick = []; G.lastWinner = null; G.results = null;
+  G.phase = 'bid';
+  log(`Rodada ${G.round}: ${G.players[G.dealer].name} deu ${G.cards} carta${G.cards > 1 ? 's' : ''}${G.blind ? ' (às cegas)' : ''}.`);
+}
+
+function placeBid(b) {
+  const p = G.players[G.turn];
+  p.bid = b;
+  log(`${p.name} palpitou ${b}.`);
+  G.turn = nextAlive(G.turn);
+  if (G.turn === G.bidStart) { G.phase = 'play'; G.leader = G.bidStart; G.turn = G.leader; G.trick = []; }
+}
+
+function playCard(ci) {
+  const p = G.players[G.turn];
+  const [card] = p.hand.splice(ci, 1);
+  G.trick.push({ p: G.turn, card });
+  if (G.trick.length === alive().length) {
+    const win = G.trick.reduce((a, b) => cardValue(b.card) > cardValue(a.card) ? b : a);
+    G.lastWinner = win.p;
+    G.players[win.p].made++;
+    log(`${G.players[win.p].name} fez a jogada com ${cardName(win.card)}.`);
+    G.phase = 'trickEnd';
+  } else G.turn = nextAlive(G.turn);
+}
+
+function afterTrick() {
+  if (G.players[G.lastWinner].hand.length === 0) return endRound();
+  // A ordem é fixa: toda jogada começa pelo primeiro jogador da rodada, ganhe quem ganhar.
+  G.leader = G.turn = G.bidStart;
+  G.trick = []; G.lastWinner = null; G.phase = 'play';
+}
+
+function endRound() {
+  G.results = alive().map(i => {
+    const p = G.players[i];
+    const lost = Math.abs(p.bid - p.made);
+    p.lives -= lost;
+    if (lost) log(`${p.name} perdeu ${lost} vida${lost > 1 ? 's' : ''} (palpite ${p.bid}, fez ${p.made}).`);
+    if (p.lives <= 0) { p.alive = false; log(`${p.name} foi eliminado.`); }
+    return { i, bid: p.bid, made: p.made, lost, lives: Math.max(0, p.lives) };
+  });
+  G.trick = []; G.lastWinner = null;
+  G.phase = alive().length <= 1 ? 'over' : 'roundEnd';
+  if (G.phase === 'over') {
+    const a = alive();
+    log(a.length ? `${G.players[a[0]].name} venceu!` : 'Ninguém sobrou: empate.');
+  }
+}
+
+function nextRound() { G.dealer = nextAlive(G.dealer); G.phase = 'deal'; }
+
+function backToLobby() {
+  G.players = G.players.filter(p => p.cpu || p.online);
+  G.players.forEach(p => Object.assign(p, { hand: [], bid: null, made: 0, alive: true }));
+  G.phase = 'lobby'; G.results = null; G.trick = []; G.log = [];
+}
+
+/* ---------- CPU ---------- */
+function cpuBid(i) {
+  const p = G.players[i];
+  if (G.blind) {
+    // Às cegas: só vê as cartas dos outros. Aposta 1 se for provável ter carta maior que a maior visível.
+    const seen = alive().filter(j => j !== i).map(j => cardValue(G.players[j].hand[0]));
+    const top = Math.max(...seen);
+    return (39 - top) / (40 - seen.length) > 0.5 ? 1 : 0;
+  }
+  const n = alive().length;
+  const exp = p.hand.reduce((sum, c) => sum + Math.pow(cardValue(c) / 39, n - 1), 0);
+  return clamp(Math.round(exp), 0, G.cards);
+}
+function cpuPlay(i) {
+  const p = G.players[i], h = p.hand; // ordenada da mais fraca para a mais forte
+  const wants = p.made < p.bid;
+  if (!G.trick.length) return wants ? h.length - 1 : 0;
+  const best = Math.max(...G.trick.map(t => cardValue(t.card)));
+  if (wants) { const k = h.findIndex(c => cardValue(c) > best); return k >= 0 ? k : 0; }
+  let k = -1;
+  h.forEach((c, j) => { if (cardValue(c) < best) k = j; });
+  return k >= 0 ? k : h.length - 1;
+}
+
+function scheduleHost() {
+  clearTimeout(hostTimer);
+  if (!G) return;
+  if (G.phase === 'trickEnd') { hostTimer = setTimeout(() => { afterTrick(); sync(); }, 1700); return; }
+  let actor = null;
+  if (G.phase === 'deal') actor = G.dealer;
+  else if (G.phase === 'bid' || G.phase === 'play') actor = G.turn;
+  if (actor === null) return;
+  const p = G.players[actor], phase = G.phase;
+  // CPUs jogam sozinhos; um jogador desconectado é substituído pela CPU depois de 20 s.
+  if (p.cpu || !p.online) {
+    hostTimer = setTimeout(() => {
+      if (G.phase !== phase) return;
+      if (phase === 'deal') deal();
+      else if (G.turn !== actor) return;
+      else if (phase === 'bid') placeBid(cpuBid(actor));
+      else playCard(cpuPlay(actor));
+      sync();
+    }, p.cpu ? 900 : 20000);
+  }
+}
+
+/* ---------- o que cada jogador pode ver ---------- */
+function viewFor(me) {
+  const blind = !!G.blind && (G.phase === 'bid' || G.phase === 'play' || G.phase === 'trickEnd');
+  return {
+    code: G.code, phase: G.phase, settings: G.settings, round: G.round, cards: G.cards,
+    dealer: G.dealer, turn: G.turn, trick: G.trick, lastWinner: G.lastWinner,
+    results: G.results, log: G.log, blind, me, isHost: G.players[me]?.token === net.token,
+    players: G.players.map((p, i) => ({
+      name: p.name, cpu: p.cpu, online: p.online, lives: p.lives, bid: p.bid, made: p.made, alive: p.alive,
+      count: p.hand.length, host: p.token === net.token,
+      shown: blind && i !== me ? p.hand : null,
+    })),
+    hand: blind ? null : (G.players[me]?.hand || []),
+  };
+}
+
+function sync() {
+  store.set(SKEY, { role: 'host', code: net.code, token: net.token, name: net.name, G });
+  for (const [tok, c] of net.conns) {
+    const i = G.players.findIndex(p => p.token === tok);
+    if (i >= 0 && c.open) { try { c.send({ type: 'view', v: viewFor(i) }); } catch {} }
+  }
+  V = viewFor(G.players.findIndex(p => p.token === net.token));
+  render();
+  scheduleHost();
+}
+
+function hostAction(token, m) {
+  if (!G || !m) return;
+  const i = G.players.findIndex(p => p.token === token);
+  const isHost = token === net.token;
+  if (i < 0) return;
+  switch (m.type) {
+    case 'settings':
+      if (!isHost || G.phase !== 'lobby') return;
+      if (m.lives !== undefined) G.settings.lives = clamp(parseInt(m.lives) || 5, 1, 15);
+      if (m.blind !== undefined) G.settings.blind = !!m.blind;
+      break;
+    case 'addCpu':
+      if (!isHost || G.phase !== 'lobby' || G.players.length >= MAX_PLAYERS) return;
+      G.players.push(newPlayer(uniqueName(CPU_NAMES.find(n => !G.players.some(p => p.name === n)) || 'CPU'), 'cpu-' + rid(), true));
+      break;
+    case 'remove': {
+      if (!isHost || G.phase !== 'lobby') return;
+      const p = G.players[m.i];
+      if (!p || p.token === net.token) return;
+      G.players.splice(m.i, 1);
+      const c = net.conns.get(p.token);
+      if (c) { net.conns.delete(p.token); try { c.send({ type: 'error', msg: 'Você foi removido da sala.' }); } catch {} setTimeout(() => c.close(), 400); }
+      break;
+    }
+    case 'start':
+      if (!isHost || G.phase !== 'lobby' || G.players.length < 2) return;
+      startGame(); break;
+    case 'deal':
+      if (G.phase !== 'deal' || (i !== G.dealer && !isHost)) return;
+      deal(); break;
+    case 'bid':
+      if (G.phase !== 'bid' || G.turn !== i || !Number.isInteger(m.b) || m.b < 0 || m.b > G.cards) return;
+      placeBid(m.b); break;
+    case 'play':
+      if (G.phase !== 'play' || G.turn !== i || !Number.isInteger(m.c) || m.c < 0 || m.c >= G.players[i].hand.length) return;
+      playCard(m.c); break;
+    case 'next':
+      if (G.phase !== 'roundEnd') return;
+      nextRound(); break;
+    case 'lobby':
+      if (!isHost || G.phase !== 'over') return;
+      backToLobby(); break;
+    default: return;
+  }
+  sync();
+}
+
+/* =========================================================
+   Rede (PeerJS / WebRTC, sem servidor próprio)
+   ========================================================= */
+function createRoom(name, settings, resumeG) {
+  net.role = 'host'; net.name = name;
+  net.code = resumeG ? resumeG.code : randCode();
+  UI.screen = 'connecting';
+  UI.msg = resumeG ? `Reabrindo a sala ${net.code}…` : 'Criando sala…';
+  render();
+  const peer = new Peer(peerId(net.code));
+  net.peer = peer;
+  peer.on('open', () => {
+    if (resumeG) {
+      G = resumeG;
+      G.players.forEach(p => { if (!p.cpu && p.token !== net.token) p.online = false; });
+    } else {
+      G = { code: net.code, phase: 'lobby', settings, players: [newPlayer(name, net.token, false)], log: [], trick: [] };
+    }
+    UI.screen = 'game'; UI.msg = '';
+    sync();
+  });
+  peer.on('connection', onHostConn);
+  peer.on('error', e => {
+    if (e.type === 'unavailable-id') {
+      peer.destroy();
+      if (resumeG) { UI.msg = `Reabrindo a sala ${net.code}… aguardando o código ficar livre.`; render(); setTimeout(() => createRoom(name, settings, resumeG), 3000); }
+      else createRoom(name, settings);
+    } else if (e.type === 'browser-incompatible') {
+      leave('Este navegador não suporta WebRTC.');
+    } else if (!G) {
+      UI.msg = 'Não foi possível falar com o servidor de conexão. Tentando de novo…'; render();
+      peer.destroy(); setTimeout(() => net.role === 'host' && createRoom(name, settings, resumeG), 3000);
+    }
+  });
+  peer.on('disconnected', () => { if (!peer.destroyed) setTimeout(() => { try { peer.reconnect(); } catch {} }, 1500); });
+}
+
+function onHostConn(conn) {
+  conn.on('data', m => {
+    if (!G || !m) return;
+    if (m.type === 'hello') {
+      const tok = String(m.token || '').slice(0, 64);
+      const name = String(m.name || '').trim().slice(0, 16) || 'Jogador';
+      let p = G.players.find(x => x.token === tok);
+      if (!tok || tok === net.token) return conn.close();
+      if (!p) {
+        const reject = msg => { try { conn.send({ type: 'error', msg }); } catch {} setTimeout(() => conn.close(), 400); };
+        if (G.phase !== 'lobby') return reject('Essa partida já começou.');
+        if (G.players.length >= MAX_PLAYERS) return reject('A sala está cheia (8 jogadores).');
+        p = newPlayer(uniqueName(name), tok, false);
+        G.players.push(p);
+      }
+      const old = net.conns.get(tok);
+      if (old && old !== conn) old.close();
+      conn.token = tok; p.online = true;
+      net.conns.set(tok, conn);
+      sync();
+    } else if (conn.token) hostAction(conn.token, m);
+  });
+  conn.on('close', () => {
+    const tok = conn.token;
+    if (!tok || net.conns.get(tok) !== conn) return;
+    net.conns.delete(tok);
+    const i = G.players.findIndex(p => p.token === tok);
+    if (i < 0) return;
+    if (G.phase === 'lobby') G.players.splice(i, 1); else G.players[i].online = false;
+    sync();
+  });
+}
+
+function joinRoom(code, name) {
+  net.role = 'client'; net.code = code; net.name = name;
+  store.set(SKEY, { role: 'client', code, token: net.token, name });
+  UI.screen = 'connecting'; UI.msg = `Conectando à sala ${code}…`;
+  render();
+  if (!net.peer || net.peer.destroyed) {
+    net.peer = new Peer();
+    net.peer.on('open', connectHost);
+    net.peer.on('error', onClientPeerError);
+    net.peer.on('disconnected', () => { if (net.peer && !net.peer.destroyed) setTimeout(() => { try { net.peer.reconnect(); } catch {} }, 1500); });
+  } else connectHost();
+}
+
+function connectHost() {
+  if (net.role !== 'client') return;
+  const c = net.peer.connect(peerId(net.code), { reliable: true });
+  net.hostConn = c;
+  c.on('open', () => c.send({ type: 'hello', token: net.token, name: net.name }));
+  c.on('data', m => {
+    if (!m || net.hostConn !== c) return;
+    if (m.type === 'view') { V = m.v; UI.screen = 'game'; UI.msg = ''; net.resuming = true; render(); }
+    else if (m.type === 'error') leave(m.msg);
+  });
+  c.on('close', () => { if (net.hostConn === c && net.role === 'client') scheduleReconnect(); });
+}
+
+function onClientPeerError(e) {
+  if (net.role !== 'client') return;
+  if (e.type === 'peer-unavailable') {
+    if (net.resuming) scheduleReconnect();
+    else leave(`A sala ${net.code} não foi encontrada. Confira o código.`);
+  } else if (e.type === 'browser-incompatible') leave('Este navegador não suporta WebRTC.');
+  else scheduleReconnect();
+}
+
+function scheduleReconnect() {
+  clearTimeout(net.rt);
+  UI.msg = 'Conexão com o anfitrião perdida. Tentando reconectar…';
+  render();
+  net.rt = setTimeout(() => {
+    if (net.role !== 'client') return;
+    if (net.peer.disconnected) { try { net.peer.reconnect(); } catch {} }
+    if (net.peer.open) connectHost(); else scheduleReconnect();
+  }, 3000);
+}
+
+function leave(error) {
+  clearTimeout(hostTimer); clearTimeout(net.rt);
+  if (net.role === 'host') for (const c of net.conns.values()) { try { c.send({ type: 'error', msg: 'O anfitrião fechou a sala.' }); } catch {} }
+  const peer = net.peer;
+  setTimeout(() => { try { peer && peer.destroy(); } catch {} }, 300);
+  Object.assign(net, { role: null, peer: null, conns: new Map(), hostConn: null, code: '', resuming: false });
+  G = null; V = null;
+  store.del(SKEY);
+  UI.screen = 'menu'; UI.msg = ''; UI.error = error || '';
+  render();
+}
+
+function send(m) {
+  if (net.role === 'host') hostAction(net.token, m);
+  else if (net.hostConn && net.hostConn.open) net.hostConn.send(m);
+}
+
+/* =========================================================
+   Interface
+   ========================================================= */
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+function cardHTML(c, mini) {
+  const su = SUITS[c.s];
+  return `<div class="card${su.red ? ' red' : ''}${mini ? ' mini' : ''}" aria-label="${cardName(c)}"><span class="rk">${RANKS[c.r]}</span><span class="big">${su.sym}</span><span class="rk bot">${RANKS[c.r]}</span></div>`;
+}
+const backHTML = () => `<div class="card back" aria-label="Carta virada"></div>`;
+
+function renderStatus() {
+  const el = document.getElementById('status');
+  if (!V || UI.screen !== 'game') { el.innerHTML = '<span>Jogo de vaza com palpites</span>'; return; }
+  if (V.phase === 'lobby') { el.innerHTML = `<span>Sala <b>${V.code}</b></span>`; return; }
+  const phaseName = { deal: 'embaralhar', bid: 'palpites', play: 'jogando', trickEnd: 'jogando', roundEnd: 'fim da rodada', over: 'fim de jogo' }[V.phase];
+  const sum = V.players.reduce((a, p) => a + (p.alive && p.bid !== null ? p.bid : 0), 0);
+  el.innerHTML = `<span>Sala <b>${V.code}</b></span><span>Rodada <b>${V.round || 1}</b></span>` +
+    `<span>Cartas <b>${V.phase === 'deal' ? '—' : V.cards}</b>${V.blind ? ' às cegas' : ''}</span>` +
+    (['bid', 'play', 'trickEnd'].includes(V.phase) ? `<span>Palpites <b>${sum}</b>/${V.cards}</span>` : '') +
+    `<span>Fase <b>${phaseName}</b></span>`;
+}
+
+function rulesHTML() {
+  return `<aside class="panel rules">
+    <h2>Regras desta mesa</h2>
+    <p>Baralho de 40 cartas. A rodada 1 tem 1 carta, e cada rodada seguinte tem uma a mais. Quando o baralho não dá, a quantidade desce até 1 e volta a subir, para o jogo nunca acabar por falta de cartas.</p>
+    <p>Com 1 carta (se a opção estiver ligada), joga-se às cegas: você vê as cartas dos outros, mas não a sua.</p>
+    <p>Cada um palpita quantas jogadas vai fazer e perde vidas igual à diferença entre o palpite e o que fez.</p>
+    <p>A ordem é fixa: o jogador depois de quem embaralha começa os palpites e todas as jogadas da rodada.</p>
+    <p>Ordem das cartas:<br><span class="order">4 5 6 7 Q J K A 2 3</span></p>
+    <p>Sem manilha. Cartas de mesmo valor desempatam pelo naipe:<br><span class="order">♣ paus › ♥ copas › ♠ espadas › ♦ ouros</span></p>
+    <p>Nome em vermelho: quem embaralha. Destacado: quem deve agir.</p>
+  </aside>`;
+}
+
+function renderMenu() {
+  const hashCode = (location.hash || '').replace('#', '').toUpperCase().slice(0, 5);
+  return `<div class="menu">
+    <div class="stack" style="gap:18px">
+      ${UI.error ? `<p class="banner">${esc(UI.error)}</p>` : ''}
+      <section class="panel stack">
+        <label class="field" for="m-name">Seu nome
+          <input type="text" id="m-name" maxlength="16" placeholder="Como os outros vão te ver" value="${esc(prefs.name)}">
+        </label>
+      </section>
+      <div class="two">
+        <section class="panel stack">
+          <h2>Criar sala</h2>
+          <label class="field" for="m-lives">Vidas por jogador
+            <input type="number" id="m-lives" min="1" max="15" value="${prefs.lives}">
+          </label>
+          <label class="check" for="m-blind"><input type="checkbox" id="m-blind" ${prefs.blind ? 'checked' : ''}> Rodada de 1 carta às cegas</label>
+          <p class="hint">Você recebe um código para mandar aos amigos. Dá para adicionar jogadores CPU na sala.</p>
+          <button class="primary" data-act="create">Criar sala</button>
+        </section>
+        <section class="panel stack">
+          <h2>Entrar numa sala</h2>
+          <label class="field" for="m-code">Código da sala
+            <input type="text" id="m-code" maxlength="5" placeholder="ABCDE" value="${esc(hashCode)}" autocomplete="off">
+          </label>
+          <button class="primary" data-act="join">Entrar</button>
+        </section>
+      </div>
+    </div>
+    ${rulesHTML()}
+  </div>`;
+}
+
+function renderLobby() {
+  const link = `${location.origin}${location.pathname}#${V.code}`;
+  const list = V.players.map((p, i) => `<div class="prow">
+      <span class="dot${p.cpu || p.online ? ' on' : ''}"></span>
+      <span class="pn">${esc(p.name)}</span>
+      ${i === V.me ? '<span class="tag">você</span>' : ''}${p.host ? '<span class="tag">anfitrião</span>' : ''}${p.cpu ? '<span class="tag">CPU</span>' : ''}
+      ${V.isHost && !p.host ? `<button data-remove="${i}" aria-label="Remover ${esc(p.name)}">Remover</button>` : ''}
+    </div>`).join('');
+  const s = V.settings;
+  return `<div class="cols">
+    <div class="stack" style="gap:18px">
+      ${UI.msg ? `<p class="banner">${esc(UI.msg)}</p>` : ''}
+      <section class="panel stack">
+        <div class="label">Código da sala</div>
+        <div class="code">${V.code}</div>
+        <div class="row"><input type="text" id="share" readonly value="${esc(link)}"><button data-act="copy" id="copybtn">Copiar link</button></div>
+      </section>
+      <section class="panel stack">
+        <h2>Jogadores (${V.players.length}/${MAX_PLAYERS})</h2>
+        <div class="plist">${list}</div>
+        ${V.isHost ? `<div class="row"><button data-act="addCpu" ${V.players.length >= MAX_PLAYERS ? 'disabled' : ''}>Adicionar CPU</button></div>` : ''}
+      </section>
+    </div>
+    <aside class="panel stack">
+      <h2>Configuração</h2>
+      ${V.isHost ? `
+        <label class="field" for="l-lives">Vidas por jogador <input type="number" id="l-lives" min="1" max="15" value="${s.lives}"></label>
+        <label class="check" for="l-blind"><input type="checkbox" id="l-blind" ${s.blind ? 'checked' : ''}> Rodada de 1 carta às cegas</label>
+        <button class="primary" data-act="start" ${V.players.length < 2 ? 'disabled' : ''}>Começar jogo</button>
+        ${V.players.length < 2 ? '<p class="hint">Precisa de pelo menos 2 jogadores. Mande o código ou adicione uma CPU.</p>' : ''}
+      ` : `
+        <p class="hint">Vidas: <b>${s.lives}</b><br>Rodada de 1 carta às cegas: <b>${s.blind ? 'sim' : 'não'}</b></p>
+        <p class="msg">Aguardando o anfitrião começar o jogo.</p>
+      `}
+      <button data-act="leave">Sair da sala</button>
+    </aside>
+  </div>`;
+}
+
+function seatsHTML() {
+  const acting = (V.phase === 'bid' || V.phase === 'play') ? V.turn : (V.phase === 'deal' ? V.dealer : -1);
+  return `<div class="seats">` + V.players.map((p, i) => {
+    const pips = Array.from({ length: V.settings.lives }, (_, k) => `<span class="pip${k < p.lives ? '' : ' lost'}"></span>`).join('');
+    const isDealer = i === V.dealer && p.alive;
+    const cls = ['seat', isDealer ? 'dealer' : '', i === acting ? 'active' : '', p.alive ? '' : 'out'].join(' ');
+    return `<div class="${cls}">
+      <div class="name"><span>${esc(p.name)}</span>${i === V.me ? '<span class="tag">você</span>' : ''}${p.cpu ? '<span class="tag">CPU</span>' : ''}${!p.cpu && !p.online ? '<span class="tag">offline</span>' : ''}${isDealer ? '<span class="tag">embaralha</span>' : ''}</div>
+      <div class="lives" aria-label="${Math.max(0, p.lives)} vidas">${pips}</div>
+      <div class="score">${p.alive ? `<span>palpite <b>${p.bid ?? '–'}</b></span><span>fez <b>${p.made}</b></span><span>cartas <b>${p.count}</b></span>` : '<span>eliminado</span>'}</div>
+      ${p.shown && p.shown.length ? `<div class="seatcard">${p.shown.map(c => cardHTML(c, true)).join('')}</div>` : ''}
+    </div>`;
+  }).join('') + `</div>`;
+}
+
+function trickHTML() {
+  if (!V.trick.length) {
+    const who = V.players[V.turn]?.name;
+    return `<div class="trick"><p class="msg">${V.phase === 'play' ? `<strong>${esc(who)}</strong> começa a jogada.` : ''}</p></div>`;
+  }
+  return `<div class="trick">` + V.trick.map(t => `<div class="played${t.p === V.lastWinner ? ' win' : ''}">${cardHTML(t.card)}<span>${esc(V.players[t.p].name)}</span></div>`).join('') + `</div>`;
+}
+
+function handZone() {
+  const P = V.players, me = P[V.me], cur = P[V.turn];
+  if (V.phase === 'deal') {
+    const d = P[V.dealer];
+    const can = V.me === V.dealer || V.isHost;
+    return `<p class="msg"><strong>${esc(d.name)}</strong> pega as cartas, embaralha e distribui.</p>` +
+      (can ? `<button class="primary" data-act="deal">Embaralhar e distribuir</button>` : '');
+  }
+  if (V.phase === 'trickEnd' && !me.count) return `<p class="msg">Fim da rodada em instantes…</p>`;
+  if (!me || !me.alive) return `<p class="msg">Você foi eliminado. Acompanhe o resto do jogo.</p>`;
+  const myTurn = V.turn === V.me;
+  let top = '';
+  if (V.phase === 'bid') {
+    if (myTurn) {
+      top = `<div class="label">Quantas jogadas você vai fazer?</div>` +
+        (V.blind ? `<p class="hint">Rodada às cegas: você vê a carta dos outros, mas não a sua.</p>` : '') +
+        `<div class="bids">` + Array.from({ length: V.cards + 1 }, (_, b) => `<button data-bid="${b}">${b}</button>`).join('') + `</div>`;
+    } else top = `<p class="msg">Aguardando palpite de <strong>${esc(cur.name)}</strong>.</p>`;
+  } else if (V.phase === 'play') {
+    top = myTurn ? `<div class="label">Sua vez: ${V.blind ? 'jogue a sua carta' : 'escolha uma carta'}</div>` : `<p class="msg">Vez de <strong>${esc(cur.name)}</strong>.</p>`;
+  }
+  const canPlay = V.phase === 'play' && myTurn;
+  const hand = V.blind
+    ? Array.from({ length: me.count }, (_, i) => `<button class="cardbtn" data-card="${i}" ${canPlay ? '' : 'disabled'} aria-label="Jogar carta virada">${backHTML()}</button>`).join('')
+    : V.hand.map((c, i) => `<button class="cardbtn" data-card="${i}" ${canPlay ? '' : 'disabled'} aria-label="Jogar ${cardName(c)}">${cardHTML(c)}</button>`).join('');
+  return `${top}<div class="label">Sua mão · palpite ${me.bid ?? '–'} · fez ${me.made}</div><div class="hand">${hand || '<span class="msg">Sem cartas</span>'}</div>`;
+}
+
+function resultsHTML() {
+  const rows = V.results.map(r => `<tr><td>${esc(V.players[r.i].name)}</td><td class="num">${r.bid}</td><td class="num">${r.made}</td><td class="num ${r.lost ? 'neg' : 'ok'}">${r.lost ? '−' + r.lost : 'acertou'}</td><td class="num">${r.lives}</td></tr>`).join('');
+  return `<div class="tablewrap"><table><thead><tr><th>Jogador</th><th>Palpite</th><th>Fez</th><th>Perdeu</th><th>Vidas</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderGame() {
+  let center;
+  if (V.phase === 'roundEnd') {
+    center = `<div class="handzone"><h2>Fim da rodada ${V.round}</h2>${resultsHTML()}<button class="primary" data-act="next">Próxima rodada</button></div>`;
+  } else if (V.phase === 'over') {
+    const a = V.players.filter(p => p.alive);
+    center = `<div class="handzone"><h2>${a.length ? `${esc(a[0].name)} venceu!` : 'Empate: todos foram eliminados'}</h2>${resultsHTML()}
+      ${V.isHost ? `<button class="primary" data-act="lobby">Voltar para a sala</button>` : '<p class="msg">Aguardando o anfitrião.</p>'}</div>`;
+  } else {
+    center = `${trickHTML()}<div class="handzone">${handZone()}</div>`;
+  }
+  return `<div class="cols">
+    <div class="stack" style="gap:18px">
+      ${UI.msg ? `<p class="banner">${esc(UI.msg)}</p>` : ''}
+      ${seatsHTML()}
+      <section class="panel table">${center}</section>
+    </div>
+    <aside class="panel stack">
+      <div class="label">Histórico</div>
+      <div class="log">${V.log.map(l => `<div>${esc(l)}</div>`).join('')}</div>
+      <button data-act="leave" style="justify-self:start">${V.isHost ? 'Fechar sala' : 'Sair da sala'}</button>
+    </aside>
+  </div>`;
+}
+
+function render() {
+  renderStatus();
+  const app = document.getElementById('app');
+  if (UI.screen === 'menu') app.innerHTML = renderMenu();
+  else if (UI.screen === 'connecting' || !V) app.innerHTML = `<section class="panel stack" style="justify-items:center;max-width:480px;margin:0 auto"><p class="msg">${esc(UI.msg)}</p><button data-act="leave">Cancelar</button></section>`;
+  else if (V.phase === 'lobby') app.innerHTML = renderLobby();
+  else app.innerHTML = renderGame();
+}
+
+/* ---------- eventos ---------- */
+function readName() {
+  const name = (document.getElementById('m-name')?.value || '').trim().slice(0, 16);
+  if (!name) { UI.error = 'Escreva o seu nome antes de continuar.'; render(); document.getElementById('m-name')?.focus(); return null; }
+  return name;
+}
+function savePrefs() { store.set(PKEY, prefs, localStorage); }
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b || b.disabled) return;
+  const act = b.dataset.act;
+  if (act === 'create') {
+    if (typeof Peer === 'undefined') { UI.error = 'Não foi possível carregar a biblioteca de conexão. Verifique a internet e recarregue.'; return render(); }
+    const name = readName(); if (!name) return;
+    UI.error = '';
+    createRoom(name, { lives: clamp(parseInt(prefs.lives) || 5, 1, 15), blind: !!prefs.blind });
+  } else if (act === 'join') {
+    if (typeof Peer === 'undefined') { UI.error = 'Não foi possível carregar a biblioteca de conexão. Verifique a internet e recarregue.'; return render(); }
+    const name = readName(); if (!name) return;
+    const code = (document.getElementById('m-code').value || '').trim().toUpperCase();
+    if (code.length !== 5) { UI.error = 'O código da sala tem 5 letras.'; return render(); }
+    UI.error = '';
+    joinRoom(code, name);
+  } else if (act === 'leave') {
+    if (net.role === 'host' && V && V.phase !== 'lobby' && !confirm('Fechar a sala encerra a partida para todos. Continuar?')) return;
+    leave();
+  } else if (act === 'copy') {
+    const input = document.getElementById('share');
+    const done = () => { b.textContent = 'Copiado'; setTimeout(() => { b.textContent = 'Copiar link'; }, 1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(input.value).then(done, () => { input.select(); });
+    else input.select();
+  } else if (['addCpu', 'start', 'deal', 'next', 'lobby'].includes(act)) send({ type: act });
+  else if (b.dataset.remove !== undefined) send({ type: 'remove', i: +b.dataset.remove });
+  else if (b.dataset.bid !== undefined) send({ type: 'bid', b: +b.dataset.bid });
+  else if (b.dataset.card !== undefined) send({ type: 'play', c: +b.dataset.card });
+});
+
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.id === 'm-name') { prefs.name = t.value; savePrefs(); }
+  if (t.id === 'm-lives') { prefs.lives = clamp(parseInt(t.value) || 5, 1, 15); savePrefs(); }
+});
+document.addEventListener('change', e => {
+  const t = e.target;
+  if (t.id === 'm-blind') { prefs.blind = t.checked; savePrefs(); }
+  if (t.id === 'l-lives') send({ type: 'settings', lives: t.value });
+  if (t.id === 'l-blind') send({ type: 'settings', blind: t.checked });
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'm-code') document.querySelector('[data-act="join"]')?.click();
+});
+
+/* ---------- arranque: retoma a sessão depois de recarregar a página ---------- */
+const saved = store.get(SKEY);
+net.token = saved?.token || rid();
+if (typeof Peer !== 'undefined' && saved?.role === 'host' && saved.G) createRoom(saved.name, saved.G.settings, saved.G);
+else if (typeof Peer !== 'undefined' && saved?.role === 'client' && saved.code) { net.resuming = true; joinRoom(saved.code, saved.name); }
+else render();
+</script>
+</body>
+</html>
