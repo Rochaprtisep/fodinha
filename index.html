@@ -53,6 +53,7 @@ h1 { font-family: var(--display); font-weight: 400; font-size: 2.2rem; margin: 0
 h2 { font-family: var(--display); font-weight: 400; font-size: 1.3rem; margin: 0; text-wrap: balance; }
 .status { font-family: var(--mono); font-size: .85rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .status b { color: var(--ink); font-weight: 500; }
+.status b.bad { color: var(--red); }
 .label { font-size: .72rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
 button {
   font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line);
@@ -65,7 +66,8 @@ button.primary:hover { filter: brightness(1.08); }
 button:disabled { opacity: .35; cursor: not-allowed; }
 .panel { background: color-mix(in srgb, var(--felt) 70%, transparent); border: 1px solid var(--line); border-radius: 16px; padding: 16px; min-width: 0; }
 .stack { display: grid; gap: 12px; align-content: start; }
-.banner { border: 1px solid var(--red); color: var(--red); border-radius: 12px; padding: 10px 14px; }
+.banner { border: 1px solid var(--red); color: var(--red); border-radius: 12px; padding: 10px 14px; margin: 0; }
+.banner ul { margin: 6px 0 0; padding-left: 18px; }
 .hint { margin: 0; color: var(--muted); font-size: .88rem; }
 .error { color: var(--red); margin: 0; }
 
@@ -173,6 +175,10 @@ td.num { font-family: var(--mono); }
 </div>
 
 <script>
+// Tudo fica dentro deste escopo: G, V e as funções do jogo não ficam acessíveis pelo console (window.G não existe).
+(() => {
+'use strict';
+
 /* =========================================================
    Cartas e regras
    ========================================================= */
@@ -191,27 +197,97 @@ const CPU_NAMES = ['Bruno', 'Carla', 'Diego', 'Elisa', 'Fábio', 'Gabi', 'Hugo',
 
 const SKEY = 'fodinha-session';
 const PKEY = 'fodinha-prefs';
+const AKEY = 'fodinha-audit';
 const store = {
   get(k, s) { try { return JSON.parse((s || sessionStorage).getItem(k)); } catch { return null; } },
   set(k, v, s) { try { (s || sessionStorage).setItem(k, JSON.stringify(v)); } catch {} },
   del(k, s) { try { (s || sessionStorage).removeItem(k); } catch {} },
 };
 const rid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+const randHex = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('');
 const randCode = () => Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
 const peerId = code => 'fodinha-mesa-' + code.toLowerCase();
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+
+/* =========================================================
+   Embaralhamento verificável
+   O anfitrião publica sha256(semente dele) ANTES de ver as sementes
+   dos convidados. O baralho sai de sha256(semente do anfitrião + sementes
+   de todos). No fim da rodada a semente é revelada e cada convidado
+   refaz o baralho e confere tudo: ninguém consegue escolher as cartas
+   nem trocá-las no meio da rodada sem ser apanhado.
+   ========================================================= */
+const sha256 = (() => {
+  const K = [], H0 = [];
+  const frac = x => ((x - Math.floor(x)) * 4294967296) | 0;
+  for (let c = 2, n = 0; n < 64; c++) {
+    let prime = true;
+    for (let d = 2; d * d <= c; d++) if (c % d === 0) { prime = false; break; }
+    if (!prime) continue;
+    if (n < 8) H0[n] = frac(Math.sqrt(c));
+    K[n++] = frac(Math.cbrt(c));
+  }
+  return str => {
+    const bytes = new TextEncoder().encode(str), l = bytes.length;
+    const words = new Array(((l + 9 + 63) >> 6) << 4).fill(0);
+    for (let i = 0; i < l; i++) words[i >> 2] |= bytes[i] << ((3 - (i & 3)) * 8);
+    words[l >> 2] |= 0x80 << ((3 - (l & 3)) * 8);
+    words[words.length - 1] = l * 8;
+    const h = H0.slice(), w = new Array(64);
+    for (let j = 0; j < words.length; j += 16) {
+      for (let i = 0; i < 16; i++) w[i] = words[j + i];
+      for (let i = 16; i < 64; i++) {
+        const x = w[i - 15], y = w[i - 2];
+        const s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+        const s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      let [a, b, c, d, e, f, g, k] = h;
+      for (let i = 0; i < 64; i++) {
+        const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+        const t1 = (k + S1 + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0;
+        const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+        const t2 = (S0 + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        k = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      [a, b, c, d, e, f, g, k].forEach((x, i) => { h[i] = (h[i] + x) | 0; });
+    }
+    return h.map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
+  };
+})();
+
+function shuffledDeck(seed) {
+  const deck = [];
+  for (let r = 0; r < 10; r++) for (let s = 0; s < 4; s++) deck.push({ r, s });
+  let pool = [], n = 0;
+  const next = () => {
+    if (!pool.length) { const h = sha256(seed + ':' + n++); for (let i = 0; i < 64; i += 8) pool.push(parseInt(h.slice(i, i + 8), 16)); }
+    return pool.shift();
+  };
+  for (let i = deck.length - 1; i > 0; i--) { const j = next() % (i + 1); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+  return deck;
+}
+const deckSeed = (hostSeed, seeds) => sha256(hostSeed + '|' + Object.keys(seeds).sort().map(id => id + ':' + seeds[id]).join('|'));
+function dealHands(seed, ids, cards) {
+  const deck = shuffledDeck(seed), hands = {};
+  ids.forEach(id => { hands[id] = []; });
+  for (let k = 0; k < cards; k++) for (const id of ids) hands[id].push(deck.pop());
+  return hands;
+}
 
 /* =========================================================
    Estado do anfitrião (fonte da verdade)
    ========================================================= */
 let G = null;          // estado completo, só existe no anfitrião
 let V = null;          // visão que este navegador desenha
+let AU = null;         // auditoria feita pelos convidados
 let hostTimer = null;
 const net = { role: null, peer: null, conns: new Map(), hostConn: null, code: '', token: '', name: '', rt: null, resuming: false };
 const UI = { screen: 'menu', msg: '', error: '' };
 const prefs = Object.assign({ name: '', lives: 5, blind: true }, store.get(PKEY, localStorage) || {});
 
-const newPlayer = (name, token, cpu) => ({ name, token, cpu, online: true, lives: 0, hand: [], bid: null, made: 0, alive: true });
+const newId = () => rid().replace(/-/g, '').slice(0, 12);
+const newPlayer = (name, token, cpu) => ({ id: newId(), name, token, cpu, online: true, lives: 0, hand: [], bid: null, made: 0, alive: true });
 const alive = () => G.players.map((p, i) => i).filter(i => G.players[i].alive);
 const nextAlive = i => { const n = G.players.length; for (let k = 1; k <= n; k++) { const j = (i + k) % n; if (G.players[j].alive) return j; } return i; };
 const maxCards = () => Math.floor(40 / alive().length);
@@ -225,14 +301,32 @@ function uniqueName(name) {
 function startGame() {
   G.players.forEach(p => Object.assign(p, { lives: G.settings.lives, alive: true, hand: [], bid: null, made: 0 }));
   Object.assign(G, {
-    phase: 'deal', round: 0, cards: 0, dir: 1, blind: false,
+    round: 0, cards: 0, dir: 1, blind: false,
     dealer: G.players.length - 1, turn: null, bidStart: null, leader: null,
     trick: [], lastWinner: null, results: null, log: [],
+    ev: null, prevEv: null, reveal: null, rngUsed: null, timer: null,
   });
+  enterDeal();
   log(`Jogo começou com ${G.players.length} jogadores e ${G.settings.lives} vidas.`);
 }
 
+// Abre a fase de embaralhar: o anfitrião se compromete com a semente dele antes de receber as dos outros.
+function enterDeal() {
+  G.phase = 'deal';
+  G.dealReq = false;
+  const hostSeed = randHex();
+  G.rng = { hostSeed, commit: sha256(hostSeed), seeds: {}, since: Date.now() };
+}
+
+// Espera a semente de todos os convidados online (no máximo 8 s, para ninguém travar a mesa).
+function seedsReady() {
+  if (!G.rng) return false;
+  const need = G.players.filter(p => !p.cpu && p.online && p.token !== net.token);
+  return need.every(p => G.rng.seeds[p.id]) || Date.now() - G.rng.since > 8000;
+}
+
 function deal() {
+  if (G.phase !== 'deal' || !G.rng) return;
   G.round++;
   if (G.round === 1) { G.cards = 1; G.dir = 1; }
   else {
@@ -243,14 +337,23 @@ function deal() {
     G.cards = clamp(c, 1, maxCards());
   }
   G.blind = G.settings.blind && G.cards === 1;
-  const deck = [];
-  for (let r = 0; r < 10; r++) for (let s = 0; s < 4; s++) deck.push({ r, s });
-  for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
-  G.players.forEach(p => { p.bid = null; p.made = 0; p.hand = []; });
-  for (let k = 0; k < G.cards; k++) for (const i of alive()) G.players[i].hand.push(deck.pop());
-  G.players.forEach(p => p.hand.sort((a, b) => cardValue(a) - cardValue(b)));
+  const ids = alive().map(i => G.players[i].id);
+  const hands = dealHands(deckSeed(G.rng.hostSeed, G.rng.seeds), ids, G.cards);
+  G.players.forEach(p => {
+    p.bid = null; p.made = 0;
+    p.hand = (hands[p.id] || []).sort((a, b) => cardValue(a) - cardValue(b));
+  });
   G.turn = G.bidStart = nextAlive(G.dealer);
   G.trick = []; G.lastWinner = null; G.results = null;
+  G.prevEv = G.ev;
+  // Histórico público da rodada: é com ele que os convidados refazem as contas.
+  G.ev = {
+    round: G.round, cards: G.cards, blind: G.blind,
+    dealerId: G.players[G.dealer].id, bidStartId: G.players[G.bidStart].id,
+    alive: ids, commit: G.rng.commit, seeded: Object.keys(G.rng.seeds).sort(),
+    bids: [], plays: [],
+  };
+  G.rngUsed = G.rng; G.rng = null; G.dealReq = false;
   G.phase = 'bid';
   log(`Rodada ${G.round}: ${G.players[G.dealer].name} deu ${G.cards} carta${G.cards > 1 ? 's' : ''}${G.blind ? ' (às cegas)' : ''}.`);
 }
@@ -258,6 +361,7 @@ function deal() {
 function placeBid(b) {
   const p = G.players[G.turn];
   p.bid = b;
+  if (G.ev) G.ev.bids.push({ id: p.id, b });
   log(`${p.name} palpitou ${b}.`);
   G.turn = nextAlive(G.turn);
   if (G.turn === G.bidStart) { G.phase = 'play'; G.leader = G.bidStart; G.turn = G.leader; G.trick = []; }
@@ -267,6 +371,7 @@ function playCard(ci) {
   const p = G.players[G.turn];
   const [card] = p.hand.splice(ci, 1);
   G.trick.push({ p: G.turn, card });
+  if (G.ev) G.ev.plays.push({ id: p.id, card: { r: card.r, s: card.s } });
   if (G.trick.length === alive().length) {
     const win = G.trick.reduce((a, b) => cardValue(b.card) > cardValue(a.card) ? b : a);
     G.lastWinner = win.p;
@@ -292,6 +397,8 @@ function endRound() {
     if (p.lives <= 0) { p.alive = false; log(`${p.name} foi eliminado.`); }
     return { i, bid: p.bid, made: p.made, lost, lives: Math.max(0, p.lives) };
   });
+  // Revela a semente para todos conferirem o baralho da rodada.
+  G.reveal = G.rngUsed ? { round: G.round, hostSeed: G.rngUsed.hostSeed, seeds: G.rngUsed.seeds } : null;
   G.trick = []; G.lastWinner = null;
   G.phase = alive().length <= 1 ? 'over' : 'roundEnd';
   if (G.phase === 'over') {
@@ -300,12 +407,12 @@ function endRound() {
   }
 }
 
-function nextRound() { G.dealer = nextAlive(G.dealer); G.phase = 'deal'; }
+function nextRound() { G.dealer = nextAlive(G.dealer); enterDeal(); }
 
 function backToLobby() {
   G.players = G.players.filter(p => p.cpu || p.online);
   G.players.forEach(p => Object.assign(p, { hand: [], bid: null, made: 0, alive: true }));
-  G.phase = 'lobby'; G.results = null; G.trick = []; G.log = [];
+  Object.assign(G, { phase: 'lobby', results: null, trick: [], log: [], ev: null, prevEv: null, reveal: null, rng: null, rngUsed: null, dealReq: false, timer: null });
 }
 
 /* ---------- CPU ---------- */
@@ -332,37 +439,55 @@ function cpuPlay(i) {
   return k >= 0 ? k : h.length - 1;
 }
 
+// Temporizadores com prazo guardado no estado: uma ressincronização (alguém reconectando, uma semente chegando)
+// não reinicia mais a contagem, então o substituto CPU de quem caiu entra mesmo depois de 20 s.
 function scheduleHost() {
   clearTimeout(hostTimer);
-  if (!G) return;
-  if (G.phase === 'trickEnd') { hostTimer = setTimeout(() => { afterTrick(); sync(); }, 1700); return; }
-  let actor = null;
-  if (G.phase === 'deal') actor = G.dealer;
-  else if (G.phase === 'bid' || G.phase === 'play') actor = G.turn;
-  if (actor === null) return;
-  const p = G.players[actor], phase = G.phase;
-  // CPUs jogam sozinhos; um jogador desconectado é substituído pela CPU depois de 20 s.
-  if (p.cpu || !p.online) {
-    hostTimer = setTimeout(() => {
-      if (G.phase !== phase) return;
-      if (phase === 'deal') deal();
-      else if (G.turn !== actor) return;
-      else if (phase === 'bid') placeBid(cpuBid(actor));
-      else playCard(cpuPlay(actor));
-      sync();
-    }, p.cpu ? 900 : 20000);
+  if (!G || G.phase === 'lobby') return;
+  let key = null, delay = 0, run = null;
+  if (G.phase === 'trickEnd') { key = 'te:' + G.ver; delay = 1700; run = afterTrick; }
+  else if (G.phase === 'deal' && G.dealReq) {
+    if (!seedsReady()) { hostTimer = setTimeout(scheduleHost, 300); return; }
+    key = 'dl:' + G.ver; run = deal;
+  } else {
+    let actor = null;
+    if (G.phase === 'deal') actor = G.dealer;
+    else if (G.phase === 'bid' || G.phase === 'play') actor = G.turn;
+    const p = actor === null ? null : G.players[actor];
+    if (p && (p.cpu || !p.online)) {
+      key = `${G.phase}:${actor}:${G.ver}:${p.cpu ? 'cpu' : 'off'}`;
+      delay = p.cpu ? 900 : 20000;
+      run = () => {
+        if (G.phase === 'deal') G.dealReq = true;
+        else if (G.phase === 'bid') placeBid(cpuBid(actor));
+        else playCard(cpuPlay(actor));
+      };
+    }
   }
+  if (!run) { G.timer = null; return; }
+  if (!G.timer || G.timer.key !== key) G.timer = { key, at: Date.now() + delay };
+  hostTimer = setTimeout(() => {
+    if (!G || !G.timer || G.timer.key !== key) return;
+    G.timer = null;
+    run();
+    changed();
+  }, Math.max(0, G.timer.at - Date.now()));
 }
 
 /* ---------- o que cada jogador pode ver ---------- */
 function viewFor(me) {
   const blind = !!G.blind && (G.phase === 'bid' || G.phase === 'play' || G.phase === 'trickEnd');
+  const dealing = G.phase === 'deal' && G.rng;
   return {
     code: G.code, phase: G.phase, settings: G.settings, round: G.round, cards: G.cards,
     dealer: G.dealer, turn: G.turn, trick: G.trick, lastWinner: G.lastWinner,
     results: G.results, log: G.log, blind, me, isHost: G.players[me]?.token === net.token,
+    ver: G.ver, dealReq: !!G.dealReq,
+    commit: dealing ? G.rng.commit : null,
+    seeded: dealing ? Object.keys(G.rng.seeds) : [],
+    ev: G.ev || null, prevEv: G.prevEv || null, reveal: G.reveal || null,
     players: G.players.map((p, i) => ({
-      name: p.name, cpu: p.cpu, online: p.online, lives: p.lives, bid: p.bid, made: p.made, alive: p.alive,
+      id: p.id, name: p.name, cpu: p.cpu, online: p.online, lives: p.lives, bid: p.bid, made: p.made, alive: p.alive,
       count: p.hand.length, host: p.token === net.token,
       shown: blind && i !== me ? p.hand : null,
     })),
@@ -380,13 +505,24 @@ function sync() {
   render();
   scheduleHost();
 }
+// Mudança de jogo: avança a versão. Ações que chegam com versão velha (duplo clique, tela atrasada) são ignoradas.
+function changed() { G.ver = (G.ver || 0) + 1; sync(); }
 
 function hostAction(token, m) {
-  if (!G || !m) return;
+  if (!G || !m || typeof m !== 'object' || typeof m.type !== 'string') return;
   const i = G.players.findIndex(p => p.token === token);
-  const isHost = token === net.token;
   if (i < 0) return;
+  const me = G.players[i];
+  const isHost = token === net.token;
+  const fresh = m.v === G.ver;
   switch (m.type) {
+    case 'seed': {
+      const r = G.rng;
+      if (G.phase !== 'deal' || !r || me.cpu || isHost || m.commit !== r.commit) return;
+      if (typeof m.seed !== 'string' || !/^[0-9a-f]{64}$/.test(m.seed) || r.seeds[me.id]) return;
+      r.seeds[me.id] = m.seed;
+      return sync();
+    }
     case 'settings':
       if (!isHost || G.phase !== 'lobby') return;
       if (m.lives !== undefined) G.settings.lives = clamp(parseInt(m.lives) || 5, 1, 15);
@@ -397,10 +533,12 @@ function hostAction(token, m) {
       G.players.push(newPlayer(uniqueName(CPU_NAMES.find(n => !G.players.some(p => p.name === n)) || 'CPU'), 'cpu-' + rid(), true));
       break;
     case 'remove': {
+      // Remove pelo id do jogador, não pela posição na lista (que muda quando alguém entra ou sai).
       if (!isHost || G.phase !== 'lobby') return;
-      const p = G.players[m.i];
+      const k = G.players.findIndex(p => p.id === m.id);
+      const p = G.players[k];
       if (!p || p.token === net.token) return;
-      G.players.splice(m.i, 1);
+      G.players.splice(k, 1);
       const c = net.conns.get(p.token);
       if (c) { net.conns.delete(p.token); try { c.send({ type: 'error', msg: 'Você foi removido da sala.' }); } catch {} setTimeout(() => c.close(), 400); }
       break;
@@ -409,23 +547,237 @@ function hostAction(token, m) {
       if (!isHost || G.phase !== 'lobby' || G.players.length < 2) return;
       startGame(); break;
     case 'deal':
-      if (G.phase !== 'deal' || (i !== G.dealer && !isHost)) return;
-      deal(); break;
+      if (!fresh || G.phase !== 'deal' || G.dealReq || (i !== G.dealer && !isHost)) return;
+      G.dealReq = true; break;
     case 'bid':
-      if (G.phase !== 'bid' || G.turn !== i || !Number.isInteger(m.b) || m.b < 0 || m.b > G.cards) return;
+      if (!fresh || G.phase !== 'bid' || G.turn !== i || !Number.isInteger(m.b) || m.b < 0 || m.b > G.cards) return;
       placeBid(m.b); break;
     case 'play':
-      if (G.phase !== 'play' || G.turn !== i || !Number.isInteger(m.c) || m.c < 0 || m.c >= G.players[i].hand.length) return;
+      if (!fresh || G.phase !== 'play' || G.turn !== i || !Number.isInteger(m.c) || m.c < 0 || m.c >= me.hand.length) return;
       playCard(m.c); break;
     case 'next':
-      if (G.phase !== 'roundEnd') return;
+      if (!fresh || G.phase !== 'roundEnd') return;
       nextRound(); break;
     case 'lobby':
       if (!isHost || G.phase !== 'over') return;
       backToLobby(); break;
     default: return;
   }
-  sync();
+  changed();
+}
+
+/* =========================================================
+   Auditoria feita por cada convidado
+   O convidado guarda o que já conferiu (vidas, rodada, ordem) e compara
+   cada atualização do anfitrião. Qualquer coisa fora das regras aparece
+   num aviso para todos os convidados.
+   ========================================================= */
+const ckey = c => c.r * 4 + c.s;
+const validCard = c => !!c && Number.isInteger(c.r) && Number.isInteger(c.s) && c.r >= 0 && c.r < 10 && c.s >= 0 && c.s < 4;
+const sameCards = (a, b) => a.length === b.length && a.map(ckey).sort((x, y) => x - y).join() === b.map(ckey).sort((x, y) => x - y).join();
+
+function auditReset(code) {
+  AU = { code, started: false, partial: false, settings: null, ids: [], lives: {}, round: 0, cards: 0, dir: 1, dealerId: null,
+    awaiting: false, dealRound: null, dealCommit: null, seeds: {}, myDealt: null, shown: {}, issues: [] };
+}
+function flag(msg) {
+  if (AU.issues.includes(msg)) return;
+  AU.issues.push(msg);
+  AU.issues = AU.issues.slice(-12);
+}
+
+// Refaz a rodada a partir do histórico público: ordem, cartas repetidas, quem ganhou cada jogada.
+function replay(ev) {
+  const n = ev.alive.length, errs = [], bids = {}, made = {}, playsBy = {};
+  ev.alive.forEach(id => { made[id] = 0; playsBy[id] = []; });
+  const start = ev.alive.indexOf(ev.bidStartId);
+  if (start < 0) errs.push('Quem começa a rodada não está na mesa.');
+  const evBids = ev.bids || [], plays = ev.plays || [];
+  evBids.forEach((x, k) => {
+    if (k >= n || x.id !== ev.alive[(start + k) % n]) errs.push('Alguém palpitou fora da vez.');
+    else if (!Number.isInteger(x.b) || x.b < 0 || x.b > ev.cards) errs.push('Houve um palpite impossível.');
+    else bids[x.id] = x.b;
+  });
+  if (plays.length && evBids.length < n) errs.push('Jogaram cartas antes de todos palpitarem.');
+  if (plays.length > n * ev.cards) errs.push('Foram jogadas cartas demais na rodada.');
+  const seen = new Set();
+  let trick = [];
+  plays.forEach((x, k) => {
+    if (x.id !== ev.alive[(start + (k % n)) % n]) errs.push('Alguém jogou fora da vez.');
+    if (!validCard(x.card) || seen.has(ckey(x.card))) { errs.push('Apareceu uma carta inválida ou repetida.'); return; }
+    seen.add(ckey(x.card));
+    if (playsBy[x.id]) playsBy[x.id].push(x.card);
+    trick.push(x);
+    if (trick.length === n) {
+      const w = trick.reduce((a, b) => ckey(b.card) > ckey(a.card) ? b : a);
+      if (made[w.id] !== undefined) made[w.id]++;
+      trick = [];
+    }
+  });
+  return { errs, bids, made, playsBy, complete: plays.length === n * ev.cards && Object.keys(bids).length === n };
+}
+
+function startRound(ev, ids, myId) {
+  const n = ids.length;
+  const aliveSeat = i => AU.lives[ids[i]] > 0;
+  const nextA = i => { for (let k = 1; k <= n; k++) { const j = (i + k) % n; if (aliveSeat(j)) return j; } return i; };
+  if (ev.round !== AU.round + 1) flag('Uma rodada foi pulada.');
+  let expDealer;
+  if (ev.round === 1) expDealer = n - 1;
+  else if (AU.dealerId) expDealer = nextA(ids.indexOf(AU.dealerId));
+  if (expDealer !== undefined && ev.dealerId !== ids[expDealer]) flag('A vez de embaralhar foi alterada.');
+  if (ev.bidStartId !== ids[nextA(ids.indexOf(ev.dealerId))]) flag('A ordem dos palpites foi alterada.');
+  const expAlive = ids.filter((id, i) => aliveSeat(i));
+  if (ev.alive.join() !== expAlive.join()) flag('Um jogador eliminado recebeu cartas (ou um vivo ficou sem).');
+  // Quantidade de cartas: mesma regra do anfitrião.
+  const max = Math.floor(40 / Math.max(1, expAlive.length));
+  let exp, dir = AU.dir;
+  if (ev.round === 1) { exp = 1; dir = 1; }
+  else if (dir === 1 || dir === -1) {
+    let c = AU.cards + dir;
+    if (c > max) { dir = -1; c = AU.cards - 1; }
+    if (c < 1) { dir = 1; c = 2; }
+    exp = clamp(c, 1, max);
+  } else dir = ev.cards > AU.cards ? 1 : ev.cards < AU.cards ? -1 : null;
+  if (exp !== undefined && ev.cards !== exp) flag(`Rodada ${ev.round}: número de cartas fora da regra.`);
+  if (ev.blind !== (AU.settings.blind && ev.cards === 1)) flag('A regra da rodada às cegas foi alterada.');
+  // O baralho tem de ser o prometido na fase de embaralhar, com a sua semente dentro.
+  if (AU.dealRound !== ev.round - 1 || !AU.dealCommit) flag(`Rodada ${ev.round}: você não participou do embaralhamento (falha de conexão ou manipulação).`);
+  else if (ev.commit !== AU.dealCommit) flag(`Rodada ${ev.round}: o baralho distribuído não é o que foi prometido.`);
+  else if (!(ev.seeded || []).includes(myId)) flag(`Rodada ${ev.round}: sua semente não entrou no embaralhamento (atraso de rede ou manipulação).`);
+  Object.assign(AU, { round: ev.round, cards: ev.cards, dir, dealerId: ev.dealerId, awaiting: true, myDealt: null, shown: {}, dealCommit: null });
+}
+
+function checkRound(ev, v, myId, byId, nameOf) {
+  const r = replay(ev);
+  r.errs.forEach(flag);
+  ev.alive.forEach(id => {
+    const p = byId[id];
+    if (!p) return;
+    if ((p.bid ?? null) !== (r.bids[id] ?? null)) flag(`O palpite de ${p.name} não bate com o histórico.`);
+    if (p.made !== r.made[id]) flag(`As jogadas feitas por ${p.name} não batem com as cartas jogadas.`);
+    if (p.count !== ev.cards - r.playsBy[id].length) flag(`${p.name} tem um número de cartas impossível.`);
+  });
+  const mine = r.playsBy[myId] || [];
+  if (!ev.blind && Array.isArray(v.hand)) {
+    if (!AU.myDealt) AU.myDealt = v.hand.concat(mine);
+    else if (!sameCards(v.hand.concat(mine), AU.myDealt)) flag('As cartas da sua mão foram trocadas no meio da rodada.');
+  }
+  if (ev.blind) {
+    v.players.forEach(p => {
+      if (!p.shown || !p.shown[0]) return;
+      const k = ckey(p.shown[0]);
+      if (AU.shown[p.id] === undefined) AU.shown[p.id] = k;
+      else if (AU.shown[p.id] !== k) flag(`A carta de ${p.name} mudou na rodada às cegas.`);
+    });
+    (ev.plays || []).forEach(pl => {
+      if (AU.shown[pl.id] !== undefined && AU.shown[pl.id] !== ckey(pl.card)) flag(`${nameOf(pl.id)} jogou uma carta diferente da que tinha.`);
+    });
+  }
+  // A mesa desenhada tem de ser a do histórico.
+  const n = ev.alive.length, full = Math.floor((ev.plays || []).length / n) * n;
+  let expTrick = null;
+  if (v.phase === 'play') expTrick = ev.plays.slice(full);
+  else if (v.phase === 'trickEnd') expTrick = ev.plays.slice(full - n, full);
+  if (expTrick && (expTrick.length !== v.trick.length || expTrick.some((x, k) => !v.trick[k].card || ckey(x.card) !== ckey(v.trick[k].card))))
+    flag('As cartas na mesa não batem com as cartas jogadas.');
+}
+
+function finishRound(ev, rv, myId, nameOf) {
+  const r = replay(ev);
+  if (!r.complete) flag(`A rodada ${ev.round} acabou antes de todas as cartas serem jogadas.`);
+  if (typeof rv.hostSeed !== 'string' || sha256(rv.hostSeed) !== ev.commit) {
+    flag(`Rodada ${ev.round}: o embaralhamento revelado não é o prometido antes da rodada.`);
+  } else {
+    const seeds = rv.seeds && typeof rv.seeds === 'object' ? rv.seeds : {};
+    if (Object.keys(seeds).sort().join() !== [...(ev.seeded || [])].sort().join()) flag(`Rodada ${ev.round}: a lista de sementes mudou.`);
+    const mySeed = AU.seeds[ev.commit];
+    if (mySeed && seeds[myId] !== undefined && seeds[myId] !== mySeed) flag(`Rodada ${ev.round}: sua semente foi adulterada.`);
+    const hands = dealHands(deckSeed(rv.hostSeed, seeds), ev.alive, ev.cards);
+    ev.alive.forEach(id => {
+      if (!sameCards(r.playsBy[id] || [], hands[id] || [])) flag(`Rodada ${ev.round}: ${nameOf(id)} jogou cartas que não recebeu.`);
+    });
+    if (AU.myDealt && !sameCards(AU.myDealt, hands[myId] || [])) flag(`Rodada ${ev.round}: a sua mão não era a do baralho embaralhado.`);
+  }
+  ev.alive.forEach(id => { if (AU.lives[id] !== undefined) AU.lives[id] -= Math.abs((r.bids[id] ?? 0) - r.made[id]); });
+  delete AU.seeds[ev.commit];
+  AU.awaiting = false;
+}
+
+function auditView(v) {
+  const me = v.players[v.me];
+  if (!me) return;
+  if (v.phase === 'lobby') { auditReset(v.code); return; }
+  const myId = me.id, ids = v.players.map(p => p.id);
+  const byId = Object.fromEntries(v.players.map(p => [p.id, p]));
+  const nameOf = id => byId[id] ? byId[id].name : '?';
+
+  if (!AU.started) {
+    AU.started = true; AU.settings = { lives: v.settings.lives, blind: v.settings.blind }; AU.ids = ids;
+    if (v.phase === 'deal' && v.round === 0) ids.forEach(id => { AU.lives[id] = v.settings.lives; });
+    else {
+      // Entrou no meio (outro dispositivo, dados apagados): confere daqui para frente.
+      AU.partial = true;
+      v.players.forEach(p => { AU.lives[p.id] = p.lives; });
+      const ev = v.ev;
+      if (ev) {
+        Object.assign(AU, { round: ev.round, cards: ev.cards, dir: null, dealerId: ev.dealerId });
+        AU.awaiting = !(v.reveal && v.reveal.round === ev.round);
+        if (AU.awaiting && !ev.blind && Array.isArray(v.hand)) AU.myDealt = v.hand.concat((ev.plays || []).filter(p => p.id === myId).map(p => p.card));
+      }
+    }
+  }
+  if (ids.join() !== AU.ids.join()) flag('A lista de jogadores mudou durante a partida.');
+  if (v.settings.lives !== AU.settings.lives || v.settings.blind !== AU.settings.blind) flag('As configurações mudaram durante a partida.');
+
+  // 1) fim de rodada: confere o baralho revelado e desconta as vidas
+  if (AU.awaiting && v.reveal && v.reveal.round === AU.round) {
+    const ev = [v.ev, v.prevEv].find(e => e && e.round === AU.round);
+    if (ev) finishRound(ev, v.reveal, myId, nameOf);
+  }
+  // 2) rodada nova
+  if (v.ev && v.ev.round > AU.round) {
+    if (AU.awaiting) { flag(`A rodada ${AU.round} terminou sem revelar o embaralhamento.`); AU.awaiting = false; }
+    startRound(v.ev, ids, myId);
+  } else if (v.ev && v.ev.round < AU.round) flag('O número da rodada voltou para trás.');
+  // 3) rodada em curso
+  if (v.ev && v.ev.round === AU.round) checkRound(v.ev, v, myId, byId, nameOf);
+  if (AU.awaiting && (v.phase === 'deal' || v.phase === 'roundEnd' || v.phase === 'over')) {
+    flag(`A rodada ${AU.round} terminou sem revelar o embaralhamento.`);
+    AU.awaiting = false;
+  }
+  // 4) vidas e fim de jogo
+  v.players.forEach(p => {
+    const l = AU.lives[p.id];
+    if (l === undefined) return;
+    if (p.lives !== l) flag(`As vidas de ${p.name} foram alteradas fora das regras.`);
+    if (p.alive !== (l > 0)) flag(`${p.name} foi eliminado ou voltou ao jogo sem motivo.`);
+  });
+  const aliveN = ids.filter(id => AU.lives[id] > 0).length;
+  if (v.phase === 'over' && aliveN > 1) flag('O jogo foi encerrado antes da hora.');
+  if (v.phase !== 'over' && aliveN <= 1) flag('O jogo já deveria ter acabado.');
+  // 5) fase de embaralhar: manda a sua semente
+  if (v.phase === 'deal' && typeof v.commit === 'string') {
+    if (AU.dealRound === v.round && AU.dealCommit && AU.dealCommit !== v.commit) flag('O anfitrião trocou o embaralhamento prometido.');
+    AU.dealRound = v.round; AU.dealCommit = v.commit;
+    if (!AU.seeds[v.commit]) {
+      AU.seeds[v.commit] = randHex();
+      const keys = Object.keys(AU.seeds);
+      keys.slice(0, Math.max(0, keys.length - 3)).forEach(k => delete AU.seeds[k]);
+    }
+    if (!(v.seeded || []).includes(myId) && net.hostConn && net.hostConn.open) {
+      try { net.hostConn.send({ type: 'seed', commit: v.commit, seed: AU.seeds[v.commit] }); } catch {}
+    }
+  }
+}
+
+function audit(v) {
+  if (!AU || AU.code !== v.code) {
+    const s = store.get(AKEY);
+    if (s && s.code === v.code && Array.isArray(s.issues)) AU = s; else auditReset(v.code);
+  }
+  try { auditView(v); } catch { flag('O anfitrião enviou dados malformados.'); }
+  store.set(AKEY, AU);
 }
 
 /* =========================================================
@@ -442,9 +794,14 @@ function createRoom(name, settings, resumeG) {
   peer.on('open', () => {
     if (resumeG) {
       G = resumeG;
-      G.players.forEach(p => { if (!p.cpu && p.token !== net.token) p.online = false; });
+      G.ver = G.ver || 0;
+      G.players.forEach(p => {
+        if (!p.id) p.id = newId();
+        if (!p.cpu && p.token !== net.token) p.online = false;
+      });
+      if (G.phase === 'deal' && !G.rng) enterDeal();
     } else {
-      G = { code: net.code, phase: 'lobby', settings, players: [newPlayer(name, net.token, false)], log: [], trick: [] };
+      G = { code: net.code, phase: 'lobby', settings, players: [newPlayer(name, net.token, false)], log: [], trick: [], ver: 0 };
     }
     UI.screen = 'game'; UI.msg = '';
     sync();
@@ -453,7 +810,7 @@ function createRoom(name, settings, resumeG) {
   peer.on('error', e => {
     if (e.type === 'unavailable-id') {
       peer.destroy();
-      if (resumeG) { UI.msg = `Reabrindo a sala ${net.code}… aguardando o código ficar livre.`; render(); setTimeout(() => createRoom(name, settings, resumeG), 3000); }
+      if (resumeG) { UI.msg = `Reabrindo a sala ${net.code}… aguardando o código ficar livre.`; render(); setTimeout(() => net.role === 'host' && createRoom(name, settings, resumeG), 3000); }
       else createRoom(name, settings);
     } else if (e.type === 'browser-incompatible') {
       leave('Este navegador não suporta WebRTC.');
@@ -466,36 +823,44 @@ function createRoom(name, settings, resumeG) {
 }
 
 function onHostConn(conn) {
+  // Conexão que não se identifica em 10 s é fechada.
+  const helloTimer = setTimeout(() => { if (!conn.token) { try { conn.close(); } catch {} } }, 10000);
+  const reject = msg => { try { conn.send({ type: 'error', msg }); } catch {} setTimeout(() => { try { conn.close(); } catch {} }, 400); };
   conn.on('data', m => {
-    if (!G || !m) return;
+    if (!G || !m || typeof m !== 'object' || typeof m.type !== 'string') return;
     if (m.type === 'hello') {
-      const tok = String(m.token || '').slice(0, 64);
-      const name = String(m.name || '').trim().slice(0, 16) || 'Jogador';
+      // Um único hello por conexão: impede uma conexão de criar vários jogadores ou trocar de identidade.
+      if (conn.greeted) return;
+      conn.greeted = true;
+      clearTimeout(helloTimer);
+      const tok = typeof m.token === 'string' ? m.token : '';
+      if (!/^[\w-]{8,64}$/.test(tok) || tok.startsWith('cpu-') || tok === net.token) return reject('Identificação inválida.');
+      const name = String(m.name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 16) || 'Jogador';
       let p = G.players.find(x => x.token === tok);
-      if (!tok || tok === net.token) return conn.close();
       if (!p) {
-        const reject = msg => { try { conn.send({ type: 'error', msg }); } catch {} setTimeout(() => conn.close(), 400); };
         if (G.phase !== 'lobby') return reject('Essa partida já começou.');
         if (G.players.length >= MAX_PLAYERS) return reject('A sala está cheia (8 jogadores).');
         p = newPlayer(uniqueName(name), tok, false);
         G.players.push(p);
       }
       const old = net.conns.get(tok);
-      if (old && old !== conn) old.close();
       conn.token = tok; p.online = true;
       net.conns.set(tok, conn);
+      if (old && old !== conn) { try { old.close(); } catch {} }
       sync();
-    } else if (conn.token) hostAction(conn.token, m);
+    } else if (conn.token && net.conns.get(conn.token) === conn) hostAction(conn.token, m);
   });
   conn.on('close', () => {
+    clearTimeout(helloTimer);
     const tok = conn.token;
-    if (!tok || net.conns.get(tok) !== conn) return;
+    if (!tok || net.conns.get(tok) !== conn || !G) return;
     net.conns.delete(tok);
     const i = G.players.findIndex(p => p.token === tok);
     if (i < 0) return;
     if (G.phase === 'lobby') G.players.splice(i, 1); else G.players[i].online = false;
     sync();
   });
+  conn.on('error', () => {});
 }
 
 function joinRoom(code, name) {
@@ -513,15 +878,24 @@ function joinRoom(code, name) {
 
 function connectHost() {
   if (net.role !== 'client') return;
+  if (net.hostConn && net.hostConn.open) return;
   const c = net.peer.connect(peerId(net.code), { reliable: true });
   net.hostConn = c;
   c.on('open', () => c.send({ type: 'hello', token: net.token, name: net.name }));
   c.on('data', m => {
-    if (!m || net.hostConn !== c) return;
-    if (m.type === 'view') { V = m.v; UI.screen = 'game'; UI.msg = ''; net.resuming = true; render(); }
-    else if (m.type === 'error') leave(m.msg);
+    if (!m || typeof m !== 'object' || net.hostConn !== c) return;
+    if (m.type === 'view' && m.v && Array.isArray(m.v.players)) {
+      V = m.v; UI.screen = 'game'; UI.msg = ''; net.resuming = true;
+      audit(V);
+      render();
+    } else if (m.type === 'error') leave(String(m.msg || 'Erro.'));
   });
-  c.on('close', () => { if (net.hostConn === c && net.role === 'client') scheduleReconnect(); });
+  c.on('close', () => {
+    if (net.hostConn !== c || net.role !== 'client') return;
+    // Antes do primeiro "view" a entrada não foi aceita: não fica tentando para sempre.
+    if (net.resuming) scheduleReconnect(); else leave('Não foi possível entrar na sala.');
+  });
+  c.on('error', () => {});
 }
 
 function onClientPeerError(e) {
@@ -538,9 +912,9 @@ function scheduleReconnect() {
   UI.msg = 'Conexão com o anfitrião perdida. Tentando reconectar…';
   render();
   net.rt = setTimeout(() => {
-    if (net.role !== 'client') return;
+    if (net.role !== 'client' || !net.peer) return;
     if (net.peer.disconnected) { try { net.peer.reconnect(); } catch {} }
-    if (net.peer.open) connectHost(); else scheduleReconnect();
+    if (net.peer.open) { net.hostConn = null; connectHost(); } else scheduleReconnect();
   }, 3000);
 }
 
@@ -550,15 +924,15 @@ function leave(error) {
   const peer = net.peer;
   setTimeout(() => { try { peer && peer.destroy(); } catch {} }, 300);
   Object.assign(net, { role: null, peer: null, conns: new Map(), hostConn: null, code: '', resuming: false });
-  G = null; V = null;
-  store.del(SKEY);
+  G = null; V = null; AU = null;
+  store.del(SKEY); store.del(AKEY);
   UI.screen = 'menu'; UI.msg = ''; UI.error = error || '';
   render();
 }
 
 function send(m) {
   if (net.role === 'host') hostAction(net.token, m);
-  else if (net.hostConn && net.hostConn.open) net.hostConn.send(m);
+  else if (net.hostConn && net.hostConn.open) { try { net.hostConn.send(m); } catch {} }
 }
 
 /* =========================================================
@@ -572,16 +946,22 @@ function cardHTML(c, mini) {
 }
 const backHTML = () => `<div class="card back" aria-label="Carta virada"></div>`;
 
+function auditStatus() {
+  if (net.role !== 'client' || !AU || !AU.started) return '';
+  if (AU.issues.length) return `<span>Verificação <b class="bad">${AU.issues.length} problema${AU.issues.length > 1 ? 's' : ''}</b></span>`;
+  return `<span>Verificação <b>${AU.partial ? 'parcial' : 'ok'}</b></span>`;
+}
+
 function renderStatus() {
   const el = document.getElementById('status');
   if (!V || UI.screen !== 'game') { el.innerHTML = '<span>Jogo de vaza com palpites</span>'; return; }
-  if (V.phase === 'lobby') { el.innerHTML = `<span>Sala <b>${V.code}</b></span>`; return; }
-  const phaseName = { deal: 'embaralhar', bid: 'palpites', play: 'jogando', trickEnd: 'jogando', roundEnd: 'fim da rodada', over: 'fim de jogo' }[V.phase];
+  if (V.phase === 'lobby') { el.innerHTML = `<span>Sala <b>${esc(V.code)}</b></span>`; return; }
+  const phaseName = { deal: 'embaralhar', bid: 'palpites', play: 'jogando', trickEnd: 'jogando', roundEnd: 'fim da rodada', over: 'fim de jogo' }[V.phase] || '';
   const sum = V.players.reduce((a, p) => a + (p.alive && p.bid !== null ? p.bid : 0), 0);
-  el.innerHTML = `<span>Sala <b>${V.code}</b></span><span>Rodada <b>${V.round || 1}</b></span>` +
+  el.innerHTML = `<span>Sala <b>${esc(V.code)}</b></span><span>Rodada <b>${V.round || 1}</b></span>` +
     `<span>Cartas <b>${V.phase === 'deal' ? '—' : V.cards}</b>${V.blind ? ' às cegas' : ''}</span>` +
     (['bid', 'play', 'trickEnd'].includes(V.phase) ? `<span>Palpites <b>${sum}</b>/${V.cards}</span>` : '') +
-    `<span>Fase <b>${phaseName}</b></span>`;
+    `<span>Fase <b>${phaseName}</b></span>` + auditStatus();
 }
 
 function rulesHTML() {
@@ -593,6 +973,7 @@ function rulesHTML() {
     <p>A ordem é fixa: o jogador depois de quem embaralha começa os palpites e todas as jogadas da rodada.</p>
     <p>Ordem das cartas:<br><span class="order">4 5 6 7 Q J K A 2 3</span></p>
     <p>Sem manilha. Cartas de mesmo valor desempatam pelo naipe:<br><span class="order">♣ paus › ♥ copas › ♠ espadas › ♦ ouros</span></p>
+    <p>Jogo limpo: todos ajudam a embaralhar e o baralho é revelado no fim de cada rodada. O navegador de cada convidado confere as cartas, as jogadas e as vidas, e avisa se o anfitrião mexer em algo.</p>
     <p>Nome em vermelho: quem embaralha. Destacado: quem deve agir.</p>
   </aside>`;
 }
@@ -636,7 +1017,7 @@ function renderLobby() {
       <span class="dot${p.cpu || p.online ? ' on' : ''}"></span>
       <span class="pn">${esc(p.name)}</span>
       ${i === V.me ? '<span class="tag">você</span>' : ''}${p.host ? '<span class="tag">anfitrião</span>' : ''}${p.cpu ? '<span class="tag">CPU</span>' : ''}
-      ${V.isHost && !p.host ? `<button data-remove="${i}" aria-label="Remover ${esc(p.name)}">Remover</button>` : ''}
+      ${V.isHost && !p.host ? `<button data-remove="${esc(p.id)}" aria-label="Remover ${esc(p.name)}">Remover</button>` : ''}
     </div>`).join('');
   const s = V.settings;
   return `<div class="cols">
@@ -644,7 +1025,7 @@ function renderLobby() {
       ${UI.msg ? `<p class="banner">${esc(UI.msg)}</p>` : ''}
       <section class="panel stack">
         <div class="label">Código da sala</div>
-        <div class="code">${V.code}</div>
+        <div class="code">${esc(V.code)}</div>
         <div class="row"><input type="text" id="share" readonly value="${esc(link)}"><button data-act="copy" id="copybtn">Copiar link</button></div>
       </section>
       <section class="panel stack">
@@ -689,13 +1070,14 @@ function trickHTML() {
     const who = V.players[V.turn]?.name;
     return `<div class="trick"><p class="msg">${V.phase === 'play' ? `<strong>${esc(who)}</strong> começa a jogada.` : ''}</p></div>`;
   }
-  return `<div class="trick">` + V.trick.map(t => `<div class="played${t.p === V.lastWinner ? ' win' : ''}">${cardHTML(t.card)}<span>${esc(V.players[t.p].name)}</span></div>`).join('') + `</div>`;
+  return `<div class="trick">` + V.trick.map(t => `<div class="played${t.p === V.lastWinner ? ' win' : ''}">${cardHTML(t.card)}<span>${esc(V.players[t.p]?.name ?? '')}</span></div>`).join('') + `</div>`;
 }
 
 function handZone() {
   const P = V.players, me = P[V.me], cur = P[V.turn];
   if (V.phase === 'deal') {
     const d = P[V.dealer];
+    if (V.dealReq) return `<p class="msg"><strong>${esc(d.name)}</strong> está embaralhando…</p>`;
     const can = V.me === V.dealer || V.isHost;
     return `<p class="msg"><strong>${esc(d.name)}</strong> pega as cartas, embaralha e distribui.</p>` +
       (can ? `<button class="primary" data-act="deal">Embaralhar e distribuir</button>` : '');
@@ -721,8 +1103,13 @@ function handZone() {
 }
 
 function resultsHTML() {
-  const rows = V.results.map(r => `<tr><td>${esc(V.players[r.i].name)}</td><td class="num">${r.bid}</td><td class="num">${r.made}</td><td class="num ${r.lost ? 'neg' : 'ok'}">${r.lost ? '−' + r.lost : 'acertou'}</td><td class="num">${r.lives}</td></tr>`).join('');
+  const rows = (V.results || []).map(r => `<tr><td>${esc(V.players[r.i].name)}</td><td class="num">${r.bid}</td><td class="num">${r.made}</td><td class="num ${r.lost ? 'neg' : 'ok'}">${r.lost ? '−' + r.lost : 'acertou'}</td><td class="num">${r.lives}</td></tr>`).join('');
   return `<div class="tablewrap"><table><thead><tr><th>Jogador</th><th>Palpite</th><th>Fez</th><th>Perdeu</th><th>Vidas</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function auditBanner() {
+  if (net.role !== 'client' || !AU || !AU.issues.length) return '';
+  return `<div class="banner" role="alert"><b>A verificação encontrou problemas nesta partida:</b><ul>${AU.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`;
 }
 
 function renderGame() {
@@ -739,6 +1126,7 @@ function renderGame() {
   return `<div class="cols">
     <div class="stack" style="gap:18px">
       ${UI.msg ? `<p class="banner">${esc(UI.msg)}</p>` : ''}
+      ${auditBanner()}
       ${seatsHTML()}
       <section class="panel table">${center}</section>
     </div>
@@ -791,10 +1179,11 @@ document.addEventListener('click', e => {
     const done = () => { b.textContent = 'Copiado'; setTimeout(() => { b.textContent = 'Copiar link'; }, 1500); };
     if (navigator.clipboard) navigator.clipboard.writeText(input.value).then(done, () => { input.select(); });
     else input.select();
-  } else if (['addCpu', 'start', 'deal', 'next', 'lobby'].includes(act)) send({ type: act });
-  else if (b.dataset.remove !== undefined) send({ type: 'remove', i: +b.dataset.remove });
-  else if (b.dataset.bid !== undefined) send({ type: 'bid', b: +b.dataset.bid });
-  else if (b.dataset.card !== undefined) send({ type: 'play', c: +b.dataset.card });
+  } else if (['addCpu', 'start', 'lobby'].includes(act)) send({ type: act });
+  else if (['deal', 'next'].includes(act)) send({ type: act, v: V.ver });
+  else if (b.dataset.remove !== undefined) send({ type: 'remove', id: b.dataset.remove });
+  else if (b.dataset.bid !== undefined) send({ type: 'bid', b: +b.dataset.bid, v: V.ver });
+  else if (b.dataset.card !== undefined) send({ type: 'play', c: +b.dataset.card, v: V.ver });
 });
 
 document.addEventListener('input', e => {
@@ -819,6 +1208,7 @@ net.token = saved?.token || rid();
 if (typeof Peer !== 'undefined' && saved?.role === 'host' && saved.G) createRoom(saved.name, saved.G.settings, saved.G);
 else if (typeof Peer !== 'undefined' && saved?.role === 'client' && saved.code) { net.resuming = true; joinRoom(saved.code, saved.name); }
 else render();
+})();
 </script>
 </body>
 </html>
